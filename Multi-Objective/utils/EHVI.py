@@ -1,7 +1,7 @@
 
 """
 Expected HyperVolume Improvement: for any p-dimension
-version: 2021-09-26
+version: 2021-10-09
 
 
 - class: EHVI
@@ -34,6 +34,7 @@ import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.linalg import svd
 from Monte_Carlo_Integration.PyTorch.monte_carlo_from_torchquad import MonteCarlo
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -53,7 +54,100 @@ class EHVI(object):
         
         self.ref_points_list = self.get_ref_points(self.corners_list)
         self.all_volume_L_list = self.get_all_volume_L(self.corners_list)
+    
+    def calculate_rEI(self, distribution_info: list):
+        #### Transform relative to independent ####
+        
+        # mean vector(m, 1), covariance matrix(m, m) = distribution information
+        mean_vector, covar_matrix = distribution_info
+        m = mean_vector.shape[0]
 
+        # avoid standard deviation equal to zero
+        zero_condition = covar_matrix.diag() <= 1e-3
+        all_zero_condition = zero_condition.all()
+
+        if all_zero_condition.item():
+            return torch.Tensor([0]).squeeze().to(device)
+
+        if zero_condition.any().item():
+            covar_matrix[zero_condition.diag()] = 1e-3
+            # covar_matrix = torch.diag(torch.diag(covar_matrix)) ## only keep diagonal element
+        
+        u, s, vh = svd(covar_matrix)
+        try:
+            sigma_neg_square_root = torch.inverse(u @ torch.diag(s).sqrt())
+            mean_vector = sigma_neg_square_root @ mean_vector
+            std_vector = torch.ones(m, 1).to(device)
+        except:
+            std_vector = covar_matrix.diag().sqrt().reshape(-1, 1)
+        
+        # Multi independent Gaussian:  mean(loc), standard deviation(scale)
+        multi_indep_normal = Normal(
+            loc=torch.zeros(mean_vector.shape, device=device),
+            scale=torch.ones(std_vector.shape, device=device)
+        )
+
+        # Calculate expected improvement of each area
+        delta_indep_list = []
+
+        for i in range(self.num_of_area):
+
+            # Get the ref_point (m, 1)
+            ref_point = self.ref_points_list[i]
+
+            # Get the lower corner value(m, 1) & upper corner value(m, 1)
+            lower_corner_value, upper_corner_value = self.corners_list[i]
+            try:
+                lower_corner_value = sigma_neg_square_root @ lower_corner_value
+                upper_corner_value = sigma_neg_square_root @ upper_corner_value
+            except:
+                pass
+
+            # Get volume-L(1, )
+            volume_L_value = self.all_volume_L_list[i]
+
+            # Calculate EI of each subsection
+
+            # Standardize corner value
+            standardize_lower_corner = (lower_corner_value - mean_vector) / std_vector
+            standardize_upper_corner = (upper_corner_value - mean_vector) / std_vector
+
+            # 'Cumulative density' & 'Probability density' at lower corner
+            lower_corner_cdf = multi_indep_normal.cdf(standardize_lower_corner)
+            lower_corner_log_pdf = multi_indep_normal.log_prob(standardize_lower_corner)
+            lower_corner_pdf = lower_corner_log_pdf.exp()
+
+            # 'Cumulative density' & 'Probability density' at upper corner
+            upper_corner_cdf = multi_indep_normal.cdf(standardize_upper_corner)
+            upper_corner_log_pdf = multi_indep_normal.log_prob(standardize_upper_corner)
+            upper_corner_pdf = upper_corner_log_pdf.exp()
+
+            # Cumulative density between [lower corner, upper corner]
+            interval_probability_each_dim = upper_corner_cdf - lower_corner_cdf
+            interval_probability_each_dim = interval_probability_each_dim.reshape(-1)
+
+            # Product of each dimension cumulative density
+            interval_probability = torch.prod(interval_probability_each_dim)
+
+            # Calculate EI
+            Q3 = volume_L_value.item() * interval_probability
+
+            Q2 = torch.prod(ref_point - upper_corner_value) * interval_probability
+
+            Q1_left_sides = (
+                ref_point - mean_vector
+            ) * upper_corner_cdf + std_vector * upper_corner_pdf
+            Q1_right_sides = (
+                ref_point - mean_vector
+            ) * lower_corner_cdf + std_vector * lower_corner_pdf
+            Q1 = torch.prod(Q1_left_sides - Q1_right_sides)
+
+            delta_indep = Q1 - Q2 + Q3
+            
+            delta_indep_list.append(delta_indep)
+
+        return torch.Tensor(delta_indep_list).sum()
+        
     def calculate_iEI(self, distribution_info: list):
         #### Assume objective are independent: easy way to solve ####
 
@@ -141,7 +235,7 @@ class EHVI(object):
 
         return torch.Tensor(delta_indep_list).sum()
 
-    def calculate_rEI(self, distribution_info: list):
+    def old_calculate_rEI(self, distribution_info: list):
         #### Assume objective are related: numerical integration ####
 
         # Declare an integrator, here we use the simple, stochastic Monte Carlo integration method
