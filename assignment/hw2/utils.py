@@ -2,10 +2,7 @@
 import numpy as np
 from numpy import array
 from numpy.linalg import det
-from numpy.random import rand
 from math import exp
-import random
-from tqdm import tqdm
 
 # main objective function
 class main_obj_function(object):
