@@ -17,3 +17,4 @@ Implement
 Implement
 1. **Cuckoo Search Optimization** (CSO)
 2. **Bat Algorithm** (BA)
+3. **Flower Pollination Algorithm** (FPA)
