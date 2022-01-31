@@ -1,7 +1,6 @@
 
 
 import numpy as np
-from numpy import array
 from numpy.random import rand, randint, normal
 from math import pi, sin, gamma
 from tqdm import tqdm
