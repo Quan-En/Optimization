@@ -16,3 +16,4 @@ Implement
 ### assignment-3 :
 Implement
 1. **Cuckoo Search Optimization** (CSO)
+2. **Bat Algorithm** (BA)
